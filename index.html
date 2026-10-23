@@ -477,8 +477,15 @@
                       </tbody>
                     </table>
                   </div>
+                <!-- Action Buttons: View on Map & Confirm Approval -->
+                <div style="margin-top: 1rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; flex-wrap: wrap;">
+                  <button class="rf-btn rf-btn-outline" id="btnBpViewMap" style="padding: 0.45rem 0.85rem; font-size: 0.78rem;">
+                    📍 View Worksite on Live Map
+                  </button>
+                  <button class="rf-btn rf-btn-green" id="btnBpSanction" style="padding: 0.45rem 1.1rem; font-size: 0.78rem; font-weight: 700;">
+                    ✓ Confirm Block Approval
+                  </button>
                 </div>
-
 
               </div>
             </div>
@@ -545,9 +552,11 @@
     </div>
 
     <!-- TAB 3: Block Planner View (Screenshots 2, 3, 4, 5, and Impact Analysis) -->
-    <div class="rf-t        <!-- SUBVIEW A: Maintenance Activity Register (Screenshot 2) -->
-        <div id="subviewRegister" style="display: none;">
-          <div class="page-header-block">
+    <div class="rf-tab-view" id="tabBlockPlanner">
+      
+      <!-- SUBVIEW A: Maintenance Activity Register (Screenshot 2) -->
+      <div id="subviewRegister">
+        <div class="page-header-block">
             <h2 class="page-main-title">Maintenance Block Planner</h2>
             <div class="page-sub-title" id="bpSectionSubtitle">Section: Active Planning Corridor &bull; Dynamic Requisition Synchronization</div>
           </div>
@@ -563,6 +572,9 @@
             </div>
 
             <div class="action-btn-group">
+              <button class="rf-btn rf-btn-outline" id="btnClearAllRequisitions" style="color: #dc2626; border-color: #fecaca; background: #fef2f2; font-weight: 700;">
+                🗑️ Clear All Requisitions
+              </button>
               <button class="rf-btn rf-btn-navy" id="btnFindBlockWindow">Find Block Window</button>
               <button class="rf-btn rf-btn-outline" id="btnReturnToOps">Return to Operations</button>
             </div>
@@ -601,7 +613,7 @@
         </div>
 
         <!-- SUBVIEW B: Candidate Block Windows (Screenshot 3) -->
-        <div id="subviewCandidates">
+        <div id="subviewCandidates" style="display: none;">
           <div class="page-header-block">
             <h2 class="page-main-title">Candidate Block Windows</h2>
             <div class="page-sub-title" id="bpCandidatesSubtitle">Ranked candidate continuous block windows evaluated by Block Optimizer</div>
@@ -844,6 +856,45 @@
             <button class="rf-btn rf-btn-navy" id="btnSaveConfig">Save Configuration</button>
           </div>
         </div>
+
+        <!-- Telegram Bot Integration Card -->
+        <div class="table-card" style="padding: 1.5rem; margin-bottom: 1.5rem; border-left: 4px solid #0088cc;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <h4 style="margin: 0; font-size: 1rem; color: #0088cc; display: flex; align-items: center; gap: 0.5rem;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="#0088cc"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.69-.52.36-1 .54-1.43.53-.48-.01-1.4-.27-2.09-.49-.85-.28-1.53-.43-1.47-.91.03-.25.38-.51 1.07-.78 4.2-1.83 7.01-3.04 8.42-3.63 4.01-1.67 4.84-1.96 5.39-1.97.12 0 .39.03.57.17.15.12.19.28.21.45-.02.16-.02.34-.05.48z"/></svg>
+                Telegram Bot Notifications &mdash; @Track_plan_bot
+              </h4>
+              <div style="font-size: 0.8rem; color: #64748b; margin-top: 4px;">
+                Real-time automated alerts for block requisitions &amp; approved maintenance timetables.
+              </div>
+            </div>
+
+            <span class="badge-pill" style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700;">
+              🟢 Bot Active (@Track_plan_bot)
+            </span>
+          </div>
+
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;">
+            <div style="font-size: 0.84rem; color: #334155; line-height: 1.6;">
+              <strong>How to connect Telegram alerts:</strong>
+              <ol style="margin-top: 0.5rem; margin-bottom: 0.5rem; padding-left: 1.25rem;">
+                <li>Open Telegram and search for <strong>@Track_plan_bot</strong> (or click <a href="https://t.me/Track_plan_bot" target="_blank" style="color: #0088cc; font-weight: 700; text-decoration: underline;">t.me/Track_plan_bot</a>).</li>
+                <li>Tap <strong>/start</strong> to register your chat.</li>
+                <li>Every time a block requisition is submitted or approved, RailFlow automatically broadcasts live alerts to your Telegram chat!</li>
+              </ol>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+            <a href="https://t.me/Track_plan_bot" target="_blank" class="rf-btn rf-btn-outline" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem;">
+              📱 Open @Track_plan_bot
+            </a>
+            <button class="rf-btn rf-btn-navy" id="btnTestTelegram">
+              🚀 Send Test Alert to Telegram
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -889,17 +940,25 @@
   <div class="modal-backdrop" id="taskDetailModal" style="display: none;">
     <div class="detail-modal-card">
       <div class="detail-modal-header">
-        <h3 class="detail-modal-title" id="taskModalTitle">Task Details: MT-SR-ENG-104</h3>
+        <h3 class="detail-modal-title" id="taskModalTitle">Task Details: REQ-SR-CIVIL-101</h3>
         <button class="modal-close-btn" id="taskModalCloseBtn">&times;</button>
       </div>
       <div class="detail-grid-2">
         <div class="detail-box-cell">
           <div class="detail-cell-label">Department</div>
-          <div class="detail-cell-value" id="taskModalDept">Engineering / Track</div>
+          <div class="detail-cell-value" id="taskModalDept">Civil / Track (P-Way)</div>
         </div>
         <div class="detail-box-cell">
           <div class="detail-cell-label">Section &amp; Track</div>
-          <div class="detail-cell-value">Katpadi–Jolarpettai (UP Main)</div>
+          <div class="detail-cell-value" id="taskModalSection">Katpadi–Jolarpettai (UP Main)</div>
+        </div>
+        <div class="detail-box-cell">
+          <div class="detail-cell-label">Worksite Location</div>
+          <div class="detail-cell-value" id="taskModalWorksite">KM 129.50 – KM 174.00</div>
+        </div>
+        <div class="detail-box-cell">
+          <div class="detail-cell-label">Assigned Work Slot</div>
+          <div class="detail-cell-value" id="taskModalSlot" style="font-weight: 700; color: #166534;">16:30 – 19:00 IST</div>
         </div>
         <div class="detail-box-cell">
           <div class="detail-cell-label">Duration Required</div>
@@ -910,10 +969,11 @@
           <div class="detail-cell-value" id="taskModalMachinery">CSM 09-32 Continuous Action Tamping Machine + BRM</div>
         </div>
       </div>
-      <div style="background: #f0fdf4; border: 1px solid #86efac; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.8rem; color: #166534; margin-bottom: 1.25rem;">
-        &#10003; <strong>Compatibility Verified:</strong> Co-located with MT-SR-SNT-218 and MT-SR-TRD-309 in single coordinated window (11:30–14:00 IST).
+      <div style="background: #f0fdf4; border: 1px solid #86efac; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.8rem; color: #166534; margin-bottom: 1.25rem;" id="taskModalCompatNote">
+        &#10003; <strong>Compatibility Verified:</strong> Scheduled in continuous shadow window with minimal train stopping delay (0 mins).
       </div>
-      <div style="display: flex; justify-content: flex-end;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="rf-btn rf-btn-outline" id="btnTaskModalSanctionMemo" style="font-size: 0.8rem; font-weight: 700;">📄 View Printable Sanction Memo</button>
         <button class="rf-btn rf-btn-navy" id="taskModalCloseBtn2">Close</button>
       </div>
     </div>

@@ -17,12 +17,29 @@ class CorridorStore {
       lastChecked: null
     };
 
+    // Persistent localStorage cache helpers
+    this.STORAGE_KEYS = {
+      REQUISITIONS: "railflow_cached_requisitions",
+      ACTIVE_CORRIDOR: "railflow_active_corridor",
+      CONFIG: "railflow_config",
+      DECISION_LOGS: "railflow_decision_logs"
+    };
+
+    const loadCache = (key, fallback) => {
+      try {
+        const item = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+        return item ? JSON.parse(item) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    };
+
     // Stations & Sections (populated dynamically from DB)
     this.stations = JSON.parse(JSON.stringify(corridorData.stations || []));
     this.sections = JSON.parse(JSON.stringify(corridorData.sections || []));
 
-    // Active Corridor State
-    this.activeCorridor = {
+    // Active Corridor State (from Cache or default)
+    this.activeCorridor = loadCache(this.STORAGE_KEYS.ACTIVE_CORRIDOR, {
       requestId: "REQ-SR-ENG-104",
       reqId: "REQ-SR-ENG-104",
       fromStation: "KPD",
@@ -43,17 +60,17 @@ class CorridorStore {
       durationMin: 150,
       windowType: "Preferred Window",
       liveDataAvailable: false
-    };
+    });
 
-    // Requisitions List
-    this.requisitions = JSON.parse(JSON.stringify(corridorData.requisitions || []));
+    // Requisitions List (from Cache or default)
+    this.requisitions = loadCache(this.STORAGE_KEYS.REQUISITIONS, JSON.parse(JSON.stringify(corridorData.requisitions || [])));
 
-    // Prototype / Operational Configuration
-    this.config = {
+    // Operational Configuration (from Cache or default)
+    this.config = loadCache(this.STORAGE_KEYS.CONFIG, {
       maxSpeedKmH: 130,
       headwayMinutes: 12,
       cautionSpeedKmH: 30
-    };
+    });
 
     // Current Recommendation from Optimizer
     this.currentRecommendation = null;
@@ -187,6 +204,11 @@ class CorridorStore {
       ...this.activeCorridor,
       ...corridorState
     };
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(this.STORAGE_KEYS.ACTIVE_CORRIDOR, JSON.stringify(this.activeCorridor));
+      }
+    } catch (e) {}
     this.notify('ACTIVE_CORRIDOR_CHANGED', this.activeCorridor);
   }
 
@@ -205,6 +227,11 @@ class CorridorStore {
     } else {
       this.requisitions.unshift(req);
     }
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(this.STORAGE_KEYS.REQUISITIONS, JSON.stringify(this.requisitions));
+      }
+    } catch (e) {}
     this.notify('REQUISITIONS_UPDATED', this.requisitions);
   }
 
@@ -222,12 +249,22 @@ class CorridorStore {
       status: entry.status || 'SCHEDULED',
       dataSource: entry.dataSource || 'Demo/Mock Data'
     });
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(this.STORAGE_KEYS.DECISION_LOGS, JSON.stringify(this.decisionLogs));
+      }
+    } catch (e) {}
     this.notify('DECISION_LOG_UPDATED', this.decisionLogs);
   }
 
   // Update Config
   updateConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(this.STORAGE_KEYS.CONFIG, JSON.stringify(this.config));
+      }
+    } catch (e) {}
     this.notify('CONFIG_UPDATED', this.config);
   }
 

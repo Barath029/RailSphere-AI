@@ -30,6 +30,6 @@
   "author": "Team CodeSmiths",
   "license": "MIT",
   "devDependencies": {
-    "concurrently": "^10.0.5"
+    "concurrently": "^8.2.2"
   }
 }

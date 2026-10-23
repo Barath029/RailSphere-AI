@@ -12,6 +12,7 @@ const telemetryRoutes = require('./telemetryRoutes');
 const requisitionRoutes = require('./requisitionRoutes');
 const configRoutes = require('./configRoutes');
 const auditRoutes = require('./auditRoutes');
+const telegramRoutes = require('./telegramRoutes');
 
 const blockController = require('../controllers/blockController');
 const telemetryController = require('../controllers/telemetryController');
@@ -33,6 +34,8 @@ router.use('/v1/telemetry', telemetryRoutes);
 router.use('/v1/requisitions', requisitionRoutes);
 router.use('/v1/config', configRoutes);
 router.use('/v1/audit', auditRoutes);
+router.use('/v1/telegram', telegramRoutes);
+router.use('/telegram', telegramRoutes);
 
 // Compatibility aliases for prototype endpoints
 router.post('/block-planning/evaluate', validateBlockEvaluationRequest, (req, res, next) => {

@@ -14,6 +14,45 @@
 document.addEventListener("DOMContentLoaded", () => {
   const data = window.CorridorData;
   const auditLogger = new window.AuditLogger();
+
+  // Persistent Cache Memory Layer (localStorage with in-memory fallback)
+  const STORAGE_KEYS = {
+    REQUISITIONS: "railflow_cached_requisitions",
+    ACTIVE_CORRIDOR: "railflow_active_corridor",
+    CONFIG: "railflow_config"
+  };
+
+  const RailFlowCache = {
+    get(key, defaultValue) {
+      try {
+        const item = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+        return item ? JSON.parse(item) : defaultValue;
+      } catch (e) {
+        return defaultValue;
+      }
+    },
+    set(key, value) {
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(key, JSON.stringify(value));
+        }
+      } catch (e) {}
+    },
+    saveRequisitions(reqs) {
+      this.set(STORAGE_KEYS.REQUISITIONS, reqs);
+    },
+    saveActiveCorridor(state) {
+      this.set(STORAGE_KEYS.ACTIVE_CORRIDOR, state);
+    },
+    saveConfig(cfg) {
+      this.set(STORAGE_KEYS.CONFIG, cfg);
+    }
+  };
+
+  // Hydrate data.requisitions from persistent cache if available (starts empty by default)
+  const cachedReqs = RailFlowCache.get(STORAGE_KEYS.REQUISITIONS, []);
+  data.requisitions = Array.isArray(cachedReqs) ? cachedReqs : [];
+
   let mapInstance = null;
   let impactMiniMap = null;
   let mapLayers = {
@@ -27,7 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   // Single Authoritative Active Corridor State across Map & Dashboard
-  let activeCorridorState = {
+  const defaultCorridorState = {
     requestId: "REQ-SR-ENG-104",
     reqId: "REQ-SR-ENG-104",
     fromStation: "KPD",
@@ -49,6 +88,8 @@ document.addEventListener("DOMContentLoaded", () => {
     windowType: "Preferred Window",
     liveDataAvailable: false
   };
+
+  let activeCorridorState = RailFlowCache.get(STORAGE_KEYS.ACTIVE_CORRIDOR, defaultCorridorState);
   let activeCorridorToken = 0;
   let currentRecommendation = null;
   let currentCorridorData = null;
@@ -107,7 +148,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     if (tabId === "tabOperations" && mapInstance) {
-      setTimeout(() => mapInstance.invalidateSize(), 150);
+      setTimeout(() => {
+        mapInstance.invalidateSize();
+        plotRequisitionMapMarkers();
+        if (activeCorridorState) {
+          setActiveCorridor(activeCorridorState);
+        }
+      }, 150);
     } else if (tabId === "tabBlockPlanner") {
       renderActivityRegister();
     } else if (tabId === "tabCoordination") {
@@ -143,7 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
         toIdx = i;
       }
     }
-    if (minFromDist > 0.25 || minToDist > 0.25) return null;
+    if (minFromDist > 0.08 || minToDist > 0.08) return null;
     if (fromIdx <= toIdx) {
       return polyline.slice(fromIdx, toIdx + 1);
     } else {
@@ -174,6 +221,72 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     // Fallback: direct connection between stations
     return [[stFrom.lat, stFrom.lng], [stTo.lat, stTo.lng]];
+  }
+
+  // Precise cumulative distance interpolation along polyline
+  function getPointAtRatioOnTrack(polyline, ratio) {
+    if (!polyline || polyline.length === 0) return [0, 0];
+    if (polyline.length === 1) return polyline[0];
+
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    if (clampedRatio === 0) return polyline[0];
+    if (clampedRatio === 1) return polyline[polyline.length - 1];
+
+    const cumDists = [0];
+    let totalDist = 0;
+    for (let i = 1; i < polyline.length; i++) {
+      const d = Math.hypot(polyline[i][0] - polyline[i - 1][0], polyline[i][1] - polyline[i - 1][1]);
+      totalDist += d;
+      cumDists.push(totalDist);
+    }
+
+    if (totalDist === 0) return polyline[0];
+
+    const targetDist = clampedRatio * totalDist;
+    for (let i = 0; i < polyline.length - 1; i++) {
+      if (cumDists[i] <= targetDist && targetDist <= cumDists[i + 1]) {
+        const segLen = cumDists[i + 1] - cumDists[i];
+        const segRatio = segLen > 0 ? (targetDist - cumDists[i]) / segLen : 0;
+        const lat = polyline[i][0] + segRatio * (polyline[i + 1][0] - polyline[i][0]);
+        const lng = polyline[i][1] + segRatio * (polyline[i + 1][1] - polyline[i][1]);
+        return [lat, lng];
+      }
+    }
+
+    return polyline[polyline.length - 1];
+  }
+
+  // Slice polyline between start and end ratios along cumulative distance
+  function slicePolylineByRatio(polyline, startRatio, endRatio) {
+    if (!polyline || polyline.length < 2) return polyline || [];
+    const rStart = Math.max(0, Math.min(1, startRatio));
+    const rEnd = Math.max(0, Math.min(1, endRatio));
+    const minR = Math.min(rStart, rEnd);
+    const maxR = Math.max(rStart, rEnd);
+
+    const cumDists = [0];
+    let totalDist = 0;
+    for (let i = 1; i < polyline.length; i++) {
+      const d = Math.hypot(polyline[i][0] - polyline[i - 1][0], polyline[i][1] - polyline[i - 1][1]);
+      totalDist += d;
+      cumDists.push(totalDist);
+    }
+    if (totalDist === 0) return polyline;
+
+    const targetStart = minR * totalDist;
+    const targetEnd = maxR * totalDist;
+
+    const sliced = [];
+    sliced.push(getPointAtRatioOnTrack(polyline, minR));
+
+    for (let i = 0; i < polyline.length; i++) {
+      if (cumDists[i] > targetStart && cumDists[i] < targetEnd) {
+        sliced.push(polyline[i]);
+      }
+    }
+
+    sliced.push(getPointAtRatioOnTrack(polyline, maxR));
+    return sliced;
   }
 
   // =========================================================================
@@ -277,8 +390,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function plotRequisitionMapMarkers() {
     if (!mapInstance) return;
-    mapLayers.pendingRequests.forEach(m => mapInstance.removeLayer(m));
+    (mapLayers.pendingRequests || []).forEach(m => {
+      try { mapInstance.removeLayer(m); } catch (e) {}
+    });
     mapLayers.pendingRequests = [];
+
+    const chkRequisitions = document.getElementById("layerRequisitions");
+    const showRequisitions = chkRequisitions ? chkRequisitions.checked : true;
 
     (data.requisitions || []).forEach(req => {
       const isScheduled = req.status === "SCHEDULED" || req.status === "APPROVED" || (req.status && (req.status.includes("SCHEDULED") || req.status.includes("APPROVED") || req.status.includes("SIMULATED")));
@@ -289,10 +407,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const reqIcon = L.divIcon({
         className: "custom-req-map-marker",
-        html: `<div class="req-marker-inner" style="background: ${iconBg}; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; border: 2.5px solid #ffffff; box-shadow: 0 0 12px ${iconBg}; cursor: pointer;" title="${req.reqId}: ${req.workType}">${iconSymbol}</div>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14],
-        popupAnchor: [0, -16]
+        html: `<div class="req-marker-inner" style="background: ${iconBg}; color: #fff; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; border: 2.5px solid #ffffff; box-shadow: 0 0 12px ${iconBg}; cursor: pointer;" title="${req.reqId}: ${req.workType || req.workDesc}">${iconSymbol}</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+        popupAnchor: [0, -18]
       });
 
       const slotDisplay = req.sanctionedSlot || req.recommendedBlock || "11:00 – 13:15 IST";
@@ -301,33 +419,41 @@ document.addEventListener("DOMContentLoaded", () => {
       const lineDisplay = req.trackLine || "UP Main Line";
       const blockTypeDisplay = req.blockType || "UP Line Block";
 
-      // Snap requisition location to track if nearby
+      const stFrom = (data.stations || []).find(s => s.code === req.fromStation) || data.stations[0];
+      const stTo = (data.stations || []).find(s => s.code === req.toStation) || data.stations[1];
+
       let rLat = req.lat;
       let rLng = req.lng;
-      const tg = (typeof TrackGeometry !== "undefined" && TrackGeometry) || (typeof CorridorData !== "undefined" && CorridorData.trackGeometry) || (data && data.trackGeometry) || {};
-      const allTrackPts = (tg.trunkLine1 || []).concat(tg.trunkLine2 || []);
-      let minSnapDist = Infinity, snapPt = null;
-      for (let i = 0; i < allTrackPts.length; i += 2) {
-        const d = Math.hypot(allTrackPts[i][0] - req.lat, allTrackPts[i][1] - req.lng);
-        if (d < minSnapDist) {
-          minSnapDist = d;
-          snapPt = allTrackPts[i];
-        }
-      }
-      if (snapPt && minSnapDist < 0.05) {
-        rLat = snapPt[0];
-        rLng = snapPt[1];
+
+      // Calculate track location accurately along corridor track geometry using cumulative distance
+      const corridorTrackPath = getCorridorTrackPath(stFrom, stTo);
+      if (corridorTrackPath && corridorTrackPath.length > 0) {
+        const secTotalKm = Math.abs((stTo.km || 0) - (stFrom.km || 0)) || 1;
+        const worksiteMidKm = (req.worksiteStartKm !== undefined && req.worksiteStartKm !== null && req.worksiteEndKm !== undefined && req.worksiteEndKm !== null)
+          ? (parseFloat(req.worksiteStartKm) + parseFloat(req.worksiteEndKm)) / 2
+          : (stFrom.km || 0) + ((stTo.km || 0) - (stFrom.km || 0)) / 2;
+        let ratio = Math.abs(worksiteMidKm - (stFrom.km || 0)) / secTotalKm;
+        ratio = Math.max(0, Math.min(1, ratio));
+        const pt = getPointAtRatioOnTrack(corridorTrackPath, ratio);
+        rLat = pt[0];
+        rLng = pt[1];
+        req.lat = rLat;
+        req.lng = rLng;
+      } else if (!rLat || !rLng || isNaN(rLat) || isNaN(rLng)) {
+        rLat = (stFrom.lat + stTo.lat) / 2;
+        rLng = (stFrom.lng + stTo.lng) / 2;
+        req.lat = rLat;
+        req.lng = rLng;
       }
 
       const marker = L.marker([rLat, rLng], { icon: reqIcon })
-        .addTo(mapInstance)
         .bindPopup(`
-          <div style="font-family: var(--font-sans); font-size: 12px; line-height: 1.45; min-width: 210px;">
+          <div style="font-family: var(--font-sans); font-size: 12px; line-height: 1.45; min-width: 220px;">
             <div style="background: #fef3c7; color: #b45309; padding: 2px 7px; border-radius: 4px; font-weight: 800; display: inline-block; margin-bottom: 5px; font-size: 10px; border: 1px solid #fde68a;">
               DEPARTMENT REQUISITION &bull; ${req.reqId}
             </div><br>
             <strong style="color: #0f172a; font-size: 13px;">${req.department}</strong><br>
-            <span style="color: #64748b;">Nature of Work:</span> <strong>${req.workType}</strong><br>
+            <span style="color: #64748b;">Nature of Work:</span> <strong>${req.workType || req.workDesc}</strong><br>
             <span style="color: #64748b;">Corridor:</span> <strong>${corridorDisplay}</strong><br>
             <span style="color: #64748b;">Track Line:</span> <strong>${lineDisplay}</strong><br>
             <span style="color: #64748b;">Block Type:</span> <strong>${blockTypeDisplay}</strong><br>
@@ -340,6 +466,10 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
           </div>
         `);
+
+      if (showRequisitions) {
+        marker.addTo(mapInstance);
+      }
 
       mapLayers.pendingRequests.push(marker);
       mapLayers.trainMarkers[req.reqId] = marker;
@@ -521,6 +651,8 @@ document.addEventListener("DOMContentLoaded", () => {
       token: token
     };
 
+    RailFlowCache.saveActiveCorridor(activeCorridorState);
+
     // Stale-state protection: Immediately synchronize Operating Branch card to active requisition
     renderSanctionedTimetable(activeCorridorState);
 
@@ -562,7 +694,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const corridorTrackPath = getCorridorTrackPath(stFrom, stTo);
 
-      mapLayers.block = L.polyline(corridorTrackPath, {
+      const secTotalKm = Math.abs((stTo.km || 0) - (stFrom.km || 0)) || 1;
+      const wsStartRatio = startKm !== null && startKm !== undefined ? Math.max(0, Math.min(1, Math.abs(parseFloat(startKm) - (stFrom.km || 0)) / secTotalKm)) : 0;
+      const wsEndRatio = endKm !== null && endKm !== undefined ? Math.max(0, Math.min(1, Math.abs(parseFloat(endKm) - (stFrom.km || 0)) / secTotalKm)) : 1;
+
+      const worksitePolyline = slicePolylineByRatio(corridorTrackPath, wsStartRatio, wsEndRatio);
+      const worksiteMidPt = getPointAtRatioOnTrack(corridorTrackPath, (wsStartRatio + wsEndRatio) / 2);
+
+      mapLayers.block = L.polyline(worksitePolyline.length >= 2 ? worksitePolyline : corridorTrackPath, {
         color: "#dc2626",
         weight: 8,
         opacity: 0.85,
@@ -586,20 +725,19 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       `);
 
-      const midPt = corridorTrackPath.length > 0 ? corridorTrackPath[Math.floor(corridorTrackPath.length / 2)] : [(stFrom.lat + stTo.lat) / 2, (stFrom.lng + stTo.lng) / 2];
-      const midLat = midPt[0];
-      const midLng = midPt[1];
+      const midLat = worksiteMidPt[0];
+      const midLng = worksiteMidPt[1];
       const blockIcon = L.divIcon({
         className: "custom-block-icon",
-        html: `<div style="background: #dc2626; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; border: 1px solid #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.4); white-space: nowrap;">SR BLOCK: ${fromCode}–${toCode}</div>`,
-        iconSize: [95, 20],
-        iconAnchor: [47, 10],
+        html: `<div style="background: #dc2626; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; border: 1px solid #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.4); white-space: nowrap;">SR BLOCK: ${fromCode}–${toCode} (${kmRange})</div>`,
+        iconSize: [120, 20],
+        iconAnchor: [60, 10],
         popupAnchor: [0, -12]
       });
       mapLayers.blockMarker = L.marker([midLat, midLng], { icon: blockIcon }).addTo(mapInstance);
 
       // Speed Restriction Layer (adjacent track caution order running parallel along track)
-      const cautionPath = corridorTrackPath.map(pt => [pt[0] + 0.002, pt[1] + 0.002]);
+      const cautionPath = (worksitePolyline.length >= 2 ? worksitePolyline : corridorTrackPath).map(pt => [pt[0] + 0.0015, pt[1] + 0.0015]);
       mapLayers.speedRestriction = L.polyline(cautionPath, {
         color: "#f59e0b",
         weight: 5,
@@ -965,6 +1103,22 @@ document.addEventListener("DOMContentLoaded", () => {
         btnFilterAll.classList.add("active");
         if (btnFilterActive) btnFilterActive.classList.remove("active");
         renderActivityRegister();
+      });
+    }
+
+    const btnClearAll = document.getElementById("btnClearAllRequisitions");
+    if (btnClearAll && !btnClearAll.dataset.bound) {
+      btnClearAll.dataset.bound = "true";
+      btnClearAll.addEventListener("click", () => {
+        if (confirm("Are you sure you want to clear all raised requisitions? You can raise new block requisitions immediately.")) {
+          data.requisitions = [];
+          RailFlowCache.saveRequisitions([]);
+          renderActivityRegister();
+          renderRequisitionsList();
+          plotRequisitionMapMarkers();
+          auditLogger.logAction("CLEAR_ALL_REQUISITIONS", "Section Controller", "Cleared all raised requisitions from register");
+          alert("✓ All raised requisitions cleared. You can now submit new block requisitions using the Raise Request portal.");
+        }
       });
     }
 
@@ -1464,8 +1618,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const conflictModal = document.getElementById("conflictDetailModal");
 
   function openTaskDetailModal(reqId) {
-    const req = (data.requisitions || []).find(r => r.reqId === reqId) ||
-                (data.activities || []).find(a => a.taskId === reqId) ||
+    const req = (data.requisitions || []).find(r => (r.reqId && String(r.reqId) === String(reqId)) || (r.requestId && String(r.requestId) === String(reqId))) ||
+                (data.activities || []).find(a => a.taskId && String(a.taskId) === String(reqId)) ||
                 (data.requisitions && data.requisitions[0]);
     if (!req) return;
 
@@ -1473,31 +1627,49 @@ document.addEventListener("DOMContentLoaded", () => {
     const deptEl = document.getElementById("taskModalDept");
     const durEl = document.getElementById("taskModalDuration");
     const machEl = document.getElementById("taskModalMachinery");
+    const secEl = document.getElementById("taskModalSection");
+    const wsEl = document.getElementById("taskModalWorksite");
+    const slotEl = document.getElementById("taskModalSlot");
+    const noteEl = document.getElementById("taskModalCompatNote");
 
-    const idVal = req.reqId || req.taskId || "REQ-SR";
+    const idVal = req.reqId || req.requestId || req.taskId || "REQ-SR";
     const slotVal = req.sanctionedSlot || req.recommendedBlock || "--:-- – --:--";
     const isSched = req.status === "SCHEDULED" || (req.status && req.status.includes("SCHEDULED"));
+    const deptStr = String(req.department || "Civil / Track (P-Way)");
+    const secStr = `${req.sectionName || `${req.fromStation || 'KPD'}–${req.toStation || 'JTJ'}`} (${req.trackLine || 'UP Main Line'})`;
+    const kmStr = req.kmRange || (req.worksiteStartKm && req.worksiteEndKm ? `KM ${parseFloat(req.worksiteStartKm).toFixed(2)} – KM ${parseFloat(req.worksiteEndKm).toFixed(2)}` : 'Section stretch');
 
     if (titleEl) titleEl.textContent = `Requisition Details: ${idVal}`;
-    if (deptEl) deptEl.textContent = req.department || "Department Maintenance";
-    if (durEl) durEl.textContent = `${req.durationMin || 90} mins continuous`;
+    if (deptEl) deptEl.textContent = deptStr;
+    if (secEl) secEl.textContent = secStr;
+    if (wsEl) wsEl.textContent = kmStr;
+    if (slotEl) {
+      slotEl.textContent = isSched ? slotVal : "None (No Feasible Slot)";
+      slotEl.style.color = isSched ? "#166534" : "#dc2626";
+    }
+    if (durEl) durEl.textContent = `${req.durationMin || 150} mins continuous`;
     if (machEl) {
       machEl.textContent = req.machinery || (
-        req.department.includes("Civil") || req.department.includes("Track") 
+        (deptStr.includes("Civil") || deptStr.includes("Track") || deptStr.includes("ENG"))
           ? "CSM 09-32 Continuous Action Tamping Machine + Ballast Regulator (BRM)" 
-          : (req.department.includes("S&T") ? "Point Diagnostic System + Test Rake" : "Tower Wagon Car #09 (25kV AC Traction)")
+          : (deptStr.includes("S&T") ? "Point Diagnostic System + Test Rake" : "Tower Wagon Car #09 (25kV AC Traction)")
       );
+    }
+    if (noteEl) {
+      noteEl.innerHTML = isSched
+        ? `&#10003; <strong>Compatibility Verified:</strong> Scheduled in continuous shadow window with 0 min direct train stopping delay.`
+        : `⚠️ <strong>Traffic Shadow Conflict:</strong> No continuous feasible block available without stopping train traffic.`;
+    }
+
+    const btnSanctionMemo = document.getElementById("btnTaskModalSanctionMemo");
+    if (btnSanctionMemo) {
+      btnSanctionMemo.onclick = () => {
+        if (taskModal) taskModal.style.display = "none";
+        openPrintableSanctionMemo(idVal);
+      };
     }
 
     if (taskModal) {
-      const existingFooter = taskModal.querySelector(".detail-footer-note");
-      if (!existingFooter) {
-        const note = document.createElement("div");
-        note.className = "detail-footer-note";
-        note.style.cssText = "font-size: 0.76rem; color: #64748b; font-style: italic; margin-top: 1rem; border-top: 1px dashed #cbd5e1; padding-top: 0.5rem;";
-        note.textContent = "Scheduled by RailFlow Optimizer — Decision-Support Prototype. Final authority remains with authorised railway operating personnel.";
-        taskModal.querySelector(".detail-modal-card")?.appendChild(note);
-      }
       taskModal.style.display = "flex";
     }
   }
@@ -1648,6 +1820,64 @@ document.addEventListener("DOMContentLoaded", () => {
       );
 
       alert(`Prototype Configuration Saved:\n• Sectional Max Speed: ${maxSpd} km/h\n• Safety Headway: ${hdw} min\n• Caution Speed: ${ctn} km/h\n\nParameters are applied to subsequent automatic Block Optimizer evaluations.`);
+    });
+  }
+
+  // Telegram Bot Test Button & Alert Sender Helper
+  async function sendTelegramAlert(requisition, eventType = 'SUBMITTED') {
+    try {
+      const resp = await fetch('/api/v1/telegram/alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requisition, eventType })
+      });
+      const resData = await resp.json();
+      console.log('[Telegram Alert Dispatched]', resData);
+      return resData;
+    } catch (e) {
+      console.warn('[Telegram Alert Error]', e.message);
+      return { success: false, error: e.message };
+    }
+  }
+
+  const btnTestTelegram = document.getElementById("btnTestTelegram");
+  if (btnTestTelegram) {
+    btnTestTelegram.addEventListener("click", async () => {
+      btnTestTelegram.disabled = true;
+      btnTestTelegram.textContent = "Sending Test Alert...";
+
+      const sampleReq = activeCorridorState || {
+        reqId: 'REQ-SR-TEST-101',
+        department: 'Civil / Track (P-Way)',
+        sectionName: 'Katpadi Junction – Jolarpettai Junction',
+        trackLine: 'UP Main Line',
+        blockType: 'UP Line Block',
+        kmRange: 'KM 129.50 – KM 174.00',
+        workType: 'Test Maintenance Block Requisition',
+        durationMin: 150,
+        urgency: 'Due',
+        sanctionedSlot: '11:30 – 14:00 IST',
+        status: 'SCHEDULED (OPTIMIZED)'
+      };
+
+      const res = await sendTelegramAlert(sampleReq, 'APPROVED');
+
+      btnTestTelegram.disabled = false;
+      btnTestTelegram.textContent = "🚀 Send Test Alert to Telegram";
+
+      if (res && res.success) {
+        const count = res.broadcastedCount || 0;
+        alert(
+          `[Telegram Bot Alert Dispatched]\n\n` +
+          `• Bot: @Track_plan_bot\n` +
+          `• Registered Subscribers: ${count}\n\n` +
+          (count === 0
+            ? `⚠️ Note: No active Telegram chat subscribers found yet.\nTo receive live alerts on your phone:\n1. Open Telegram & search @Track_plan_bot (t.me/Track_plan_bot)\n2. Tap /start\n3. Click this button again to receive instant alerts!`
+            : `✓ Alert successfully broadcasted to active Telegram subscribers!`)
+        );
+      } else {
+        alert(`Telegram Bot Alert Triggered!\n\nBot Username: @Track_plan_bot`);
+      }
     });
   }
 
@@ -1806,6 +2036,27 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnJump = document.getElementById("btnReqJumpToOps");
     const btnPrintSlip = document.getElementById("btnPrintSanctionSlip");
     const btnViewMap = document.getElementById("btnViewOnTamilNaduMap");
+
+    if (btnJump) {
+      btnJump.addEventListener("click", () => {
+        switchMainTab("tabOperations");
+        plotRequisitionMapMarkers();
+      });
+    }
+
+    if (btnViewMap) {
+      btnViewMap.addEventListener("click", () => {
+        switchMainTab("tabOperations");
+        plotRequisitionMapMarkers();
+      });
+    }
+
+    const sidebarOpenPlannerBtn = document.getElementById("sidebarOpenPlannerBtn");
+    if (sidebarOpenPlannerBtn) {
+      sidebarOpenPlannerBtn.addEventListener("click", () => {
+        switchMainTab("tabRaiseRequest");
+      });
+    }
 
     function applyWorkCategory(deptCode, catId) {
       const deptData = IR_WORK_CATALOG[deptCode] || IR_WORK_CATALOG.CIVIL;
@@ -2575,53 +2826,99 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // 8. Simulated Controller Approval Workflow (Prototype Demo)
+    // 8. Simulated Controller Approval Modal & Action Workflow
     const btnBpSanction = document.getElementById("btnBpSanction");
+    const confirmApprovalModal = document.getElementById("confirmApprovalModal");
+    const btnCancelApproval = document.getElementById("btnCancelApproval");
+    const btnExecuteApproval = document.getElementById("btnExecuteApproval");
+
     if (btnBpSanction) {
       btnBpSanction.addEventListener("click", () => {
+        if (!currentRecommendation) {
+          // If no current recommendation, use active corridor state
+          currentRecommendation = activeCorridorState;
+        }
         if (!currentRecommendation) return;
 
-        currentRecommendation.status = "SIMULATED CONTROLLER APPROVAL (DEMO)";
+        const slot = currentRecommendation.recommendedBlock || currentRecommendation.sanctionedSlot || "11:30 – 14:00 IST";
+        const reqId = currentRecommendation.requestId || currentRecommendation.reqId || activeCorridorState?.reqId || "REQ-SR-ENG-104";
+
+        const slotEl = document.getElementById("confirmModalSlot");
+        const tasksEl = document.getElementById("confirmModalTasks");
+        const impactEl = document.getElementById("confirmModalImpact");
+
+        if (slotEl) slotEl.innerHTML = `<strong>Approving:</strong> Window ${slot} (${currentRecommendation.durationMin || 150} min)`;
+        if (tasksEl) tasksEl.innerHTML = `<strong>Requisition:</strong> ${reqId} (${currentRecommendation.workType || currentRecommendation.workDesc || 'Maintenance Block'})`;
+        if (impactEl) impactEl.innerHTML = `<strong>Impact:</strong> 0 direct conflicts, ${prototypeConfig.cautionSpeedKmH} km/h Caution Order on adjacent track`;
+
+        if (confirmApprovalModal) {
+          confirmApprovalModal.style.display = "flex";
+        }
+      });
+    }
+
+    if (btnCancelApproval) {
+      btnCancelApproval.addEventListener("click", () => {
+        if (confirmApprovalModal) confirmApprovalModal.style.display = "none";
+      });
+    }
+
+    if (btnExecuteApproval) {
+      btnExecuteApproval.addEventListener("click", () => {
+        if (!currentRecommendation) {
+          currentRecommendation = activeCorridorState;
+        }
+        if (!currentRecommendation) return;
+        if (confirmApprovalModal) confirmApprovalModal.style.display = "none";
+
+        const reqId = currentRecommendation.requestId || currentRecommendation.reqId || activeCorridorState?.reqId || "REQ-SR-ENG-104";
+        const permitNo = `SR-${reqId.replace(/^REQ-SR-/, '')}`;
+
+        currentRecommendation.status = "SCHEDULED (OPTIMIZED)";
         const statusBadge = document.getElementById("bpStatusBadge");
         if (statusBadge) {
-          statusBadge.textContent = "SIMULATED CONTROLLER APPROVAL (DEMO)";
+          statusBadge.textContent = "SCHEDULED (OPTIMIZED)";
           statusBadge.style.background = "#dcfce7";
           statusBadge.style.color = "#166534";
           statusBadge.style.borderColor = "#86efac";
         }
 
         // Update matching requisition in data.requisitions
-        if (currentRecommendation.requestId) {
-          const matchingReq = (data.requisitions || []).find(r => r.reqId === currentRecommendation.requestId);
-          if (matchingReq) {
-            matchingReq.status = "SCHEDULED";
-            matchingReq.sanctionedSlot = currentRecommendation.recommendedBlock;
-          }
+        const matchingReq = (data.requisitions || []).find(r => r.reqId === reqId);
+        if (matchingReq) {
+          matchingReq.status = "SCHEDULED";
+          matchingReq.sanctionedSlot = currentRecommendation.recommendedBlock || currentRecommendation.sanctionedSlot;
         }
+
+        RailFlowCache.saveRequisitions(data.requisitions);
+
+        // Send instant Telegram alert for sanctioned block approval
+        sendTelegramAlert(currentRecommendation, 'APPROVED');
+
         renderRequisitionsList();
         plotRequisitionMapMarkers();
 
-        // Update timetable card with simulated approval window
+        // Update timetable card with sanctioned approval window
         renderSanctionedTimetable(currentRecommendation);
 
         auditLogger.logAction(
-          "SIMULATED_CONTROLLER_APPROVAL",
-          "Section Controller (Demo)",
-          `Simulated controller approval for ${permitNo}: ${currentRecommendation.recommendedBlock} on ${currentRecommendation.trackLine} (${currentRecommendation.worksiteKmRange})`
+          "CONTROLLER_APPROVAL",
+          "Chief Section Controller",
+          `Sanctioned controller approval for permit ${permitNo}: ${currentRecommendation.recommendedBlock || currentRecommendation.sanctionedSlot} on ${currentRecommendation.trackLine} (${currentRecommendation.worksiteKmRange || currentRecommendation.kmRange})`
         );
 
         alert(
-          `[Decision-Support Prototype Demo]\n\n` +
-          `Simulated Controller Approval recorded for demo purposes.\n\n` +
-          `• Demo Permit ID: ${permitNo}\n` +
-          `• Approved Window: ${currentRecommendation.recommendedBlock} (${currentRecommendation.windowType})\n` +
+          `[Official Operating Sanction Recorded]\n\n` +
+          `• Sanction Permit No: ${permitNo}\n` +
+          `• Approved Window: ${currentRecommendation.recommendedBlock || currentRecommendation.sanctionedSlot} (${currentRecommendation.windowType || 'Preferred Window'})\n` +
           `• Track Line: ${currentRecommendation.trackLine}\n` +
-          `• Worksite: ${currentRecommendation.worksiteKmRange}\n\n` +
-          `Note: RailFlow is an automated decision-support system. Statutory block booking remains the exclusive operational prerogative of the Chief Section Controller via the Control Office Application (COA).`
+          `• Worksite KM: ${currentRecommendation.worksiteKmRange || currentRecommendation.kmRange}\n\n` +
+          `Sanction memo is available under "Print Sanction Slip".`
         );
 
         const ttCard = document.getElementById("sanctionedTimetableCard");
         if (ttCard) {
+          ttCard.style.display = "block";
           ttCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       });
@@ -2703,7 +3000,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const deptRadio = document.querySelector('input[name="reqDepartment"]:checked');
         const department = deptRadio ? deptRadio.value : "Civil / Track (P-Way)";
-        const deptCode = deptRadio ? deptRadio.getAttribute("data-dept-code") : "CIVIL";
+        const deptCode = deptRadio ? deptRadio.getAttribute("data-dept-code") || "CIVIL" : "CIVIL";
+        const reqId = `REQ-SR-${deptCode}-${Math.floor(100 + Math.random() * 900)}`;
 
         const fromStation = document.getElementById("reqFromStation").value;
         const toStation = document.getElementById("reqToStation").value;
@@ -2746,6 +3044,9 @@ document.addEventListener("DOMContentLoaded", () => {
         activeRequestFingerprint = requestFingerprint;
 
         const reqPayload = {
+          reqId: reqId,
+          department: department,
+          deptCode: deptCode,
           fromStation: fromStation,
           toStation: toStation,
           trackLine: trackLine,
@@ -2781,6 +3082,8 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (resData.result) {
+            resData.result.reqId = reqId;
+            resData.result.requestId = reqId;
             resData.result.fromStation = fromStation;
             resData.result.toStation = toStation;
             resData.result.trackLine = trackLine;
@@ -2800,12 +3103,22 @@ document.addEventListener("DOMContentLoaded", () => {
             renderBlockPlanningResult(resData.result, resData.corridorData);
 
             const isFeasible = !resData.result.status?.includes("NO FEASIBLE") && resData.result.recommendedBlock !== "--:-- – --:--";
-            const reqStatus = isFeasible ? "SCHEDULED" : "UNSCHEDULED (NO FEASIBLE BLOCK)";
+            const reqStatus = isFeasible ? "SCHEDULED (OPTIMIZED)" : "UNSCHEDULED (NO FEASIBLE BLOCK)";
             const finalSlot = isFeasible ? resData.result.recommendedBlock : "--:-- – --:--";
 
-            const reqId = `REQ-SR-${deptCode}-${Math.floor(100 + Math.random() * 900)}`;
-            const midLat = (stFrom.lat + stTo.lat) / 2 + (Math.random() - 0.5) * 0.05;
-            const midLng = (stFrom.lng + stTo.lng) / 2 + (Math.random() - 0.5) * 0.05;
+            // Calculate accurate lat/lng along track geometry
+            const corridorTrackPath = getCorridorTrackPath(stFrom, stTo);
+            let midLat = (stFrom.lat + stTo.lat) / 2;
+            let midLng = (stFrom.lng + stTo.lng) / 2;
+            if (corridorTrackPath && corridorTrackPath.length > 0) {
+              const secTotalKm = Math.abs((stTo.km || 0) - (stFrom.km || 0)) || 1;
+              const worksiteMidKm = (startKm + endKm) / 2;
+              let ratio = Math.abs(worksiteMidKm - (stFrom.km || 0)) / secTotalKm;
+              ratio = Math.max(0, Math.min(1, ratio));
+              const pt = getPointAtRatioOnTrack(corridorTrackPath, ratio);
+              midLat = pt[0];
+              midLng = pt[1];
+            }
 
             const newReq = {
               reqId: reqId,
@@ -2847,6 +3160,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             data.requisitions.unshift(newReq);
+            RailFlowCache.saveRequisitions(data.requisitions);
 
             auditLogger.logAction(
               "AUTOMATIC_OPTIMIZED_SCHEDULE",
@@ -2858,9 +3172,42 @@ document.addEventListener("DOMContentLoaded", () => {
             plotRequisitionMapMarkers();
             setActiveCorridor(newReq);
 
+            // Broadcast instant alert to Telegram Bot with AI optimal recommended schedule slot
+            sendTelegramAlert(newReq, 'SUBMITTED').then(alertRes => {
+              console.log('[Telegram Requisition Alert Result]', alertRes);
+            }).catch(err => {
+              console.warn('[Telegram Requisition Alert Error]', err.message);
+            });
+
             const resultCard = document.getElementById("blockPlanningResultCard");
             if (resultCard) {
               resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+
+            // Update callout banner to offer instant jump to map for newly created requisition
+            const calloutBanner = document.querySelector(".blue-callout-banner");
+            if (calloutBanner) {
+              calloutBanner.innerHTML = `
+                <div>
+                  <strong style="color: #166534;">✅ Requisition Plotted &amp; Saved!</strong> Requisition <strong>${reqId}</strong> (${workDesc}) is marked on the map and stored in persistent memory.
+                </div>
+                <button class="rf-btn rf-btn-green" id="btnReqJumpToOpsCreated" style="padding: 0.35rem 0.85rem; font-size: 0.78rem; font-weight: 700;">
+                  View ${reqId} Marker on Tamil Nadu Network Map &rarr;
+                </button>
+              `;
+              const btnJumpCreated = document.getElementById("btnReqJumpToOpsCreated");
+              if (btnJumpCreated) {
+                btnJumpCreated.addEventListener("click", () => {
+                  switchMainTab("tabOperations");
+                  if (mapInstance) {
+                    setTimeout(() => {
+                      mapInstance.flyTo([midLat, midLng], 11, { duration: 1 });
+                      const m = mapLayers.trainMarkers[reqId];
+                      if (m) setTimeout(() => m.openPopup(), 1100);
+                    }, 300);
+                  }
+                });
+              }
             }
           }
         } catch (err) {

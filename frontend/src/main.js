@@ -29,19 +29,11 @@ document.addEventListener("DOMContentLoaded", () => {
   updateLiveHeaderClock();
   setInterval(updateLiveHeaderClock, 1000);
 
-  // 2. Live Database Status Badge
+  // 2. Live Database Status Badge (Removed from header per user request)
   function updateDbStatusBadge(status) {
     const badgeEl = document.getElementById("dbStatusBadge");
     if (!badgeEl) return;
-    if (status && status.connected) {
-      badgeEl.className = "rf-db-status-badge online";
-      badgeEl.innerHTML = `<span class="db-dot"></span><span class="db-label">PostgreSQL: Connected</span>`;
-      badgeEl.title = `Connected to PostgreSQL database (railflow_db) via Prisma ORM`;
-    } else {
-      badgeEl.className = "rf-db-status-badge fallback";
-      badgeEl.innerHTML = `<span class="db-dot"></span><span class="db-label">DB: In-Memory Mode</span>`;
-      badgeEl.title = `Backend operating in In-Memory fallback mode`;
-    }
+    badgeEl.style.display = "none";
   }
 
   store.subscribe((type, payload) => {

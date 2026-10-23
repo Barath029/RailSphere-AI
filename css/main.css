@@ -123,9 +123,23 @@ body {
 
 .rf-header-right {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   color: #e2e8f0;
-  font-weight: 500;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+#liveHeaderClock {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* ==========================================================================

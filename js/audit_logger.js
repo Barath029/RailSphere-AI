@@ -5,7 +5,13 @@
 
 class AuditLogger {
   constructor() {
-    this.logs = [
+    let cached = null;
+    try {
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem("railflow_audit_logs") : null;
+      if (raw) cached = JSON.parse(raw);
+    } catch (e) {}
+
+    this.logs = (Array.isArray(cached) && cached.length > 0) ? cached : [
       {
         id: "LOG-1001",
         timestamp: "09:15:20",
@@ -48,6 +54,11 @@ class AuditLogger {
       details: details
     };
     this.logs.unshift(newLog);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("railflow_audit_logs", JSON.stringify(this.logs));
+      }
+    } catch (e) {}
     return newLog;
   }
 

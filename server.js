@@ -32,6 +32,7 @@ if (fs.existsSync(envPath)) {
 const trainDataService = require('./server/services/trainDataService');
 const blockOptimizationService = require('./server/services/blockOptimizationService');
 const railRadarService = require('./server/services/railRadarService');
+const telegramBotService = require('./server/services/telegramBotService');
 
 const PORT = process.env.PORT || 3000;
 const BASE_DIR = __dirname;
@@ -71,15 +72,43 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
+  // Telegram API Endpoints
+  if ((pathname === '/api/telegram/alert' || pathname === '/api/v1/telegram/alert') && req.method === 'POST') {
+    let bodyData = '';
+    req.on('data', chunk => bodyData += chunk);
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(bodyData || '{}');
+        if (payload.chatId) {
+          telegramBotService.addSubscriber(payload.chatId);
+        }
+        const broadcastRes = await telegramBotService.broadcastRequisitionAlert(payload.requisition || payload, payload.eventType || 'SUBMITTED');
+        return sendJson(res, 200, { success: true, botUsername: '@Track_plan_bot', ...broadcastRes });
+      } catch (err) {
+        return sendJson(res, 500, { success: false, error: err.message });
+      }
+    });
+    return;
+  }
+
+  if ((pathname === '/api/telegram/status' || pathname === '/api/v1/telegram/status') && req.method === 'GET') {
+    return sendJson(res, 200, {
+      success: true,
+      botUsername: '@Track_plan_bot',
+      tokenConfigured: true,
+      subscribersCount: telegramBotService.getSubscribers().length,
+      subscribers: telegramBotService.getSubscribers()
+    });
+  }
+
   // =========================================================================
   // API ROUTE 1: Evaluate Block Planning Request
   // POST /api/block-planning/evaluate
   // =========================================================================
-  if (pathname === '/api/block-planning/evaluate' && req.method === 'POST') {
+  if ((pathname === '/api/block-planning/evaluate' || pathname === '/api/v1/blocks/evaluate') && req.method === 'POST') {
     let bodyData = '';
     req.on('data', (chunk) => {
       bodyData += chunk;
-      // Protect from body flood (> 1MB)
       if (bodyData.length > 1e6) {
         req.destroy();
       }
@@ -97,20 +126,11 @@ const server = http.createServer(async (req, res) => {
         const worksiteEndKm = payload.worksiteEndKm !== undefined && payload.worksiteEndKm !== null && payload.worksiteEndKm !== '' ? payload.worksiteEndKm : null;
         const worksiteKmRange = payload.worksiteKmRange || (worksiteStartKm !== null && worksiteEndKm !== null ? `KM ${parseFloat(worksiteStartKm).toFixed(2)} – KM ${parseFloat(worksiteEndKm).toFixed(2)}` : 'KM 129.50 – KM 180.00');
 
-        // 1. Strict backend Line & Block Type compatibility validation
         function validateLineBlockCompatibility(line, block) {
-          if (line === 'UP Main Line') {
-            return block === 'UP Line Block';
-          }
-          if (line === 'DOWN Main Line') {
-            return block === 'DOWN Line Block';
-          }
-          if (line === 'Both UP & DOWN Lines') {
-            return block === 'Both Lines Block (Simultaneous)';
-          }
-          if (line === 'Station Loop / Yard Track') {
-            return block === 'Station Loop / Yard Track Block';
-          }
+          if (line === 'UP Main Line') return block === 'UP Line Block';
+          if (line === 'DOWN Main Line') return block === 'DOWN Line Block';
+          if (line === 'Both UP & DOWN Lines') return block === 'Both Lines Block (Simultaneous)';
+          if (line === 'Station Loop / Yard Track') return block === 'Station Loop / Yard Track Block';
           return false;
         }
 
@@ -124,7 +144,6 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
-        // 2. Strict backend chainage & worksite validation
         const kmValidation = trainDataService.validateWorksiteKmRange(
           fromStation,
           toStation,
@@ -143,7 +162,6 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
-        // 2. Fetch train corridor data via TrainDataService (RailRadar or fallback)
         const corridorData = await trainDataService.getCorridorTrains(
           fromStation,
           toStation,
@@ -153,8 +171,27 @@ const server = http.createServer(async (req, res) => {
           worksiteEndKm
         );
 
-        // 3. Compute optimal continuous block recommendation
         const result = blockOptimizationService.findOptimalBlock(corridorData, payload);
+
+        // Async Telegram broadcast alert for new requisition evaluation
+        telegramBotService.broadcastRequisitionAlert({
+          reqId: result.requestId || payload.reqId || 'REQ-SR-PLAN',
+          department: payload.department || 'Department Requisition',
+          sectionName: `${fromStation} – ${toStation}`,
+          fromStation: fromStation,
+          toStation: toStation,
+          trackLine: trackLine,
+          blockType: blockType,
+          worksiteStartKm: worksiteStartKm,
+          worksiteEndKm: worksiteEndKm,
+          kmRange: worksiteKmRange,
+          workType: payload.workDesc || 'Maintenance Block',
+          durationMin: payload.durationMin || 150,
+          urgency: payload.urgency || 'Due',
+          sanctionedSlot: result.recommendedBlock,
+          recommendedBlock: result.recommendedBlock,
+          status: result.status || 'SCHEDULED'
+        }, 'SUBMITTED').catch(err => console.warn('[TelegramBot] Async alert error:', err.message));
 
         return sendJson(res, 200, {
           success: true,
@@ -190,11 +227,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // =========================================================================
-  // API ROUTE 2: Telemetry & API Key Status
-  // GET /api/telemetry/status
-  // =========================================================================
-  if (pathname === '/api/telemetry/status' && req.method === 'GET') {
+  // Health Check Endpoint
+  if (pathname === '/api/health' && req.method === 'GET') {
+    return sendJson(res, 200, {
+      status: 'UP',
+      service: 'RailFlow Enterprise API',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Telemetry Endpoint
+  if ((pathname === '/api/telemetry/status' || pathname === '/api/v1/telemetry/status') && req.method === 'GET') {
     const hasKey = !!railRadarService.getApiKey();
     return sendJson(res, 200, {
       success: true,

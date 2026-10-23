@@ -24,3 +24,8 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Runtime Data & Scratch Output
+scratch/telegram_subscribers.json
+scratch/*.png
+
